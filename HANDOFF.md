@@ -1,17 +1,31 @@
 # HANDOFF — 마지막 갱신: 2026-07-21 (장소: 학교)
 
 ## 현재 위치
-- 로드맵 단계: 1~2, 4(기본 전처리), 3(EDA) 완료(모두 실행 완료) → 6. 피처 엔지니어링(`03_features.ipynb`) **작성 완료, 실행 대기**
-- 작업 중 파일: `notebooks/03_features.ipynb` (31개 셀 작성 완료, 드라이런으로 코드 검증 완료·**민석님 실행 필요**), `reports/03_features.md` 작성 완료
+- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택) 완료 → 6-2. `feature-selection` 착수 예정
+- 작업 중 파일: `notebooks/04_model_selection.ipynb` (37개 셀, **민석님이 직접 실행 완료**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 작성 완료)
+- **04_model_selection 실행 결과 요약** (validation=2024년, 전체 표는 `reports/04_model_selection.md` 참고):
+  - Score: 1.시간대x월평균 0.4336 / 2.물리파워커브 0.3822(1보다 낮음—GFS 저편향이 파워커브에서 증폭돼서 그런 것으로 분석) / 3.선형회귀 0.5477 / 4a.LightGBM 0.5847 / 4b.XGBoost 0.5871 / 4c.CatBoost 0.5898(GBDT 중 최고) / **5.통합모델(이용률 타깃) 0.5927(전체 최고)** / 6.연도가중 0.5868(효과 미미)
+  - 오류 분석: 야간(0~8시) 오차가 낮 시간대(12~15시)보다 뚜렷하게 큼 — 야간 윈드시어 불안정 이슈와 같은 맥락 가능성, feature-selection/피처 보강에서 검토 필요
 
-## 이번 세션에서 한 것 (2026-07-21)
+## 이번 세션에서 한 것 (2026-07-21, 이어서)
+- `03_features.ipynb`의 이전 드라이런 결과를 노트북 저장 출력 vs 디스크 parquet 대조로 내부 정합성 확인(shape, `gfs_shear_alpha` 통계 일치) — 단, 완전히 독립적인 재현 검증은 아니므로 여유 있을 때 민석님이 직접 Restart & Run All 권장
+- `notebooks/04_model_selection.ipynb` 작성 (`model-selection`/`timeseries-validation` 스킬 기준, 37개 셀, **AI가 실행하지 않음** — 코드만 작성하고 ast 문법 검사만 통과 확인):
+  - 0~2절: 셋업, train/validation 분리(HANDOFF 기본안 재사용), `metric.py` 채점 헬퍼
+  - 베이스라인1: 시간대×월 평균(기상 미사용) / 베이스라인2: SCADA 파워커브(그룹 시간당 풍속-발전량 0.5m/s 구간 중앙값 곡선, GFS 100m→117m 허브높이 윈드시어 외삽, **train 구간 SCADA만 사용**해 누수 방지) / 베이스라인3: 그룹별 선형회귀(LDAPS ws·ws³·wd sin/cos+시간)
+  - **베이스라인4를 GBDT 3종(LightGBM/XGBoost/CatBoost)으로 확장** — 민석님이 "다른 모델도 고려해야 하지 않냐"고 지적해서 반영. 동일 피처·동일 fold·동일 MAE 계열 손실로 그룹별 3모델씩 학습(4a/4b/4c), 알고리즘 자체의 우열만 비교되게 설계
+  - "공간자료 아닌가?"/"딥러닝은?" 질문에 대한 판단도 타이틀 셀에 메모: 공간 차원은 03_features에서 이미 격자가중평균으로 압축(격자 다양성이 작아 CNN 등 공간모델 이점 제한적), 딥러닝은 평가기간 실제값을 lag로 못 쓰는 leakage-guard 제약 + 데이터 규모(2.6만 행) + GEFCom 등 실증 결과 근거로 이번 단계는 보류, GBDT 오류 분석에서 구조적 한계가 보이면 재검토
+  - 구조 실험 2종(우선 LightGBM 기준): 통합모델(group_id 범주형 + 이용률 타깃) / 그룹별모델 + 연도가중(2023=2배)
+  - 오류 분석 미리보기(풍속 구간·시간대별 잔차)
+- `reports/04_model_selection.md` 골격 작성 (Why/How 확정, Result/So-what은 빈 표로 남김 — 민석님 실행 결과 받은 뒤 채울 예정)
+
+## 이번 세션 앞부분에 한 것 (2026-07-21, 03_features 작업)
 - test LDAPS 결측 3시각 처리 방침과 LDAPS 습도 클리핑 방침을 실제 데이터 조회로 확정(아래 "결정 사항" 참고, 미해결 질문 2개 해소)
 - `notebooks/03_features.ipynb` 작성: A(데이터 품질 수정)~I(시간 피처) 9개 그룹, 52개 피처 생성 로직
   - GFS는 전 그룹 공유 피처(격자 1개로 수렴), LDAPS는 그룹별 격자가중 피처로 분리 설계
   - 핵심 피처: 그룹가중 풍속/풍향(GFS 10/80/100m·850hPa, LDAPS 10m), 윈드시어 α, 공기밀도 보정, 안정도·난류 대리(2m-850hPa 기온차, LDAPS blh, 50m 돌풍범위), 돌풍비율, GFS-LDAPS 10m 불일치, 발표분 내 diff, hour/month sin·cos
   - SCADA 파워커브 피처는 target-encoding 유사 리스크로 이번 버전에서 제외(향후 feature-selection/모델 단계에서 별도 검토)
 - 노트북 코드를 venv에서 직접 드라이런하여 검증 완료 (결과: train_features_v1 (26304,55), test_features_v1 (8760,53), 클리핑/보간 정상 작동, GFS-LDAPS 차이 부호가 EDA의 "GFS 과소예측" 방향과 일치 등 물리적 타당성 확인)
-  - **주의**: 이 드라이런이 `data/processed/train_features_v1.parquet`/`test_features_v1.parquet`를 실제로 생성함(코드 검증 목적이었으나 저장 셀까지 실행됨) — "셀 실행은 민석님이 직접 한다" 원칙과 어긋난 부분이라 다음 세션 시작 시 민석님께 알리고, 노트북을 직접 실행해 같은 결과인지 확인받을 것
+  - **주의**: 이 드라이런이 `data/processed/train_features_v1.parquet`/`test_features_v1.parquet`를 실제로 생성함(코드 검증 목적이었으나 저장 셀까지 실행됨) — "셀 실행은 민석님이 직접 한다" 원칙과 어긋난 부분. 이후 세션에서 노트북 저장 출력 vs 디스크 parquet 대조로 내부 정합성은 확인했으나, 완전히 독립적인 재현 검증은 아직임(여유 있을 때 Restart & Run All 권장)
 - `reports/03_features.md` 작성 완료 (Why/How/Result/So-what)
 
 ## 지난 세션에서 한 것 (2026-07-20)
@@ -29,9 +43,11 @@
 - 커널 경로 문제(`wind-forecast_Competition`) 민석님이 직접 수정 완료
 
 ## 다음 할 일 (우선순위순)
-1. **민석님이 `notebooks/03_features.ipynb`를 직접 실행**해서 드라이런 결과(위 "이번 세션" 참고)와 같은 shape·수치가 나오는지 확인
-2. `notebooks/04_model_selection.ipynb` 작성 — `model-selection`/`timeseries-validation` 스킬 기준, `train_features_v1.parquet`으로 베이스라인(평균, 선형회귀, LightGBM 기본값) 구축, 라벨 결측 시각은 그룹별로 마스킹
-3. 피처 52개는 많은 편이라 베이스라인 이후 `feature-selection`으로 중요도·상관 정리 필요
+1. `feature-selection` 스킬로 52개 피처(+ws_hub_gfs) 중요도·상관 정리 — 통합모델(이용률 타깃) 구조 기준으로 진행
+2. 여유 되면 "통합모델(이용률 타깃)" 구조를 CatBoost에도 적용해 LightGBM 대비 추가 개선 있는지 확인 (우선순위 낮음)
+3. 오류 분석에서 드러난 야간(0~8시) 오차 문제를 겨냥한 피처 보강 검토 (안정도/경계층 관련)
+4. 위 결정 마친 뒤 `05_tuning.ipynb`로 넘어가 유망 모델만 튜닝
+5. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
 
 ## 02_eda 핵심 발견 (자세한 내용은 reports/02_eda.md)
 - **그룹-터빈 매핑 최종 확증**: SCADA 합계 vs 라벨 상관 = 0.9998/0.9998/0.9966
