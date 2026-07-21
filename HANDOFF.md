@@ -1,10 +1,20 @@
-# HANDOFF — 마지막 갱신: 2026-07-20 (장소: 학교)
+# HANDOFF — 마지막 갱신: 2026-07-21 (장소: 학교)
 
 ## 현재 위치
-- 로드맵 단계: 1~2, 4(기본 전처리), 3(EDA) 완료(모두 실행 완료) → 6. 피처 엔지니어링(`03_features.ipynb`) 시작 예정
-- 작업 중 파일: `notebooks/02_eda.ipynb` (82개 셀 작성 및 실행 완료), `reports/02_eda.md` 작성 완료
+- 로드맵 단계: 1~2, 4(기본 전처리), 3(EDA) 완료(모두 실행 완료) → 6. 피처 엔지니어링(`03_features.ipynb`) **작성 완료, 실행 대기**
+- 작업 중 파일: `notebooks/03_features.ipynb` (31개 셀 작성 완료, 드라이런으로 코드 검증 완료·**민석님 실행 필요**), `reports/03_features.md` 작성 완료
 
-## 지난 세션에서 한 것
+## 이번 세션에서 한 것 (2026-07-21)
+- test LDAPS 결측 3시각 처리 방침과 LDAPS 습도 클리핑 방침을 실제 데이터 조회로 확정(아래 "결정 사항" 참고, 미해결 질문 2개 해소)
+- `notebooks/03_features.ipynb` 작성: A(데이터 품질 수정)~I(시간 피처) 9개 그룹, 52개 피처 생성 로직
+  - GFS는 전 그룹 공유 피처(격자 1개로 수렴), LDAPS는 그룹별 격자가중 피처로 분리 설계
+  - 핵심 피처: 그룹가중 풍속/풍향(GFS 10/80/100m·850hPa, LDAPS 10m), 윈드시어 α, 공기밀도 보정, 안정도·난류 대리(2m-850hPa 기온차, LDAPS blh, 50m 돌풍범위), 돌풍비율, GFS-LDAPS 10m 불일치, 발표분 내 diff, hour/month sin·cos
+  - SCADA 파워커브 피처는 target-encoding 유사 리스크로 이번 버전에서 제외(향후 feature-selection/모델 단계에서 별도 검토)
+- 노트북 코드를 venv에서 직접 드라이런하여 검증 완료 (결과: train_features_v1 (26304,55), test_features_v1 (8760,53), 클리핑/보간 정상 작동, GFS-LDAPS 차이 부호가 EDA의 "GFS 과소예측" 방향과 일치 등 물리적 타당성 확인)
+  - **주의**: 이 드라이런이 `data/processed/train_features_v1.parquet`/`test_features_v1.parquet`를 실제로 생성함(코드 검증 목적이었으나 저장 셀까지 실행됨) — "셀 실행은 민석님이 직접 한다" 원칙과 어긋난 부분이라 다음 세션 시작 시 민석님께 알리고, 노트북을 직접 실행해 같은 결과인지 확인받을 것
+- `reports/03_features.md` 작성 완료 (Why/How/Result/So-what)
+
+## 지난 세션에서 한 것 (2026-07-20)
 - 데이터 파일 구조 확인 (`data/data_description.md`, `info.xlsx`)
 - `info.xlsx` info 시트로 KPX 그룹-터빈 매핑 확인:
   - kpx_group_1 = VESTAS wtg01-06 (V126, 3.6MW×6=21.6MW)
@@ -19,9 +29,9 @@
 - 커널 경로 문제(`wind-forecast_Competition`) 민석님이 직접 수정 완료
 
 ## 다음 할 일 (우선순위순)
-1. `notebooks/03_features.ipynb` 작성 시작 (`wind-domain-features`/`feature-selection`/`leakage-guard` 스킬 기준) — `reports/02_eda.md`의 "So-what" 9개 항목을 피처 설계 근거로 사용
-2. test LDAPS 부분 결측 3개 시각의 정확한 `forecast_kst_dtm` 특정 후 결측 처리 방침 확정 (같은 발표분 내 다른 격자 보간 vs 인근 발표분 ffill, leakage-guard 판정 필요)
-3. LDAPS 상대습도 100% 초과값 클리핑 적용 여부 결정
+1. **민석님이 `notebooks/03_features.ipynb`를 직접 실행**해서 드라이런 결과(위 "이번 세션" 참고)와 같은 shape·수치가 나오는지 확인
+2. `notebooks/04_model_selection.ipynb` 작성 — `model-selection`/`timeseries-validation` 스킬 기준, `train_features_v1.parquet`으로 베이스라인(평균, 선형회귀, LightGBM 기본값) 구축, 라벨 결측 시각은 그룹별로 마스킹
+3. 피처 52개는 많은 편이라 베이스라인 이후 `feature-selection`으로 중요도·상관 정리 필요
 
 ## 02_eda 핵심 발견 (자세한 내용은 reports/02_eda.md)
 - **그룹-터빈 매핑 최종 확증**: SCADA 합계 vs 라벨 상관 = 0.9998/0.9998/0.9966
@@ -52,6 +62,8 @@
   - 노트북 파일 순서는 로드맵 문서 순서(EDA→전처리)와 달리 `01_preprocessing.ipynb`(구조 변환: long→wide, 병합) → `02_eda.ipynb`(본격 탐색) 순으로 진행 — EDA가 wide 병합 테이블을 필요로 하기 때문 (`preprocessing`/`eda-checklist` 스킬 기준)
 - **그룹 대표 격자는 "그룹 평균 좌표 → 최근접 격자 1개"가 아니라 "터빈별 최근접 격자 비율로 가중평균"(`GROUP_GRID_WEIGHTS`) 방식 채택** — LDAPS에서 group_2가 격자 두 개로 정확히 반반 갈리는 걸 확인했기 때문. GFS는 전 그룹이 격자 하나로 수렴해 영향 없음
 - **SCADA `power_kw10m`은 10분 에너지(kWh)로 확정** — 라벨 대조로 검증(비율 0.98~1.0). "출력(kW)"으로 오해해 10/60을 곱하면 6배 축소되는 버그가 생김
+- **test LDAPS 결측 3개 시각 처리 확정**: 결측 시각은 정확히 `2025-04-08 17:00`/`2025-06-18 18:00`/`2025-07-18 06:00` 3개뿐이며, 세 시각 모두 **16개 격자 전부에서 동일 변수만** 빠짐(격자별 문제 아님). 빠진 변수는 구름량/경계층고도(blh)/해면기압/적설/지면기압/지형고/50m 돌풍최대·최소, 07-18만 추가로 2m 기온·습도·이슬점·5m 풍속시어. **핵심 피처인 10m 풍속 u/v(`10u`/`10v`)는 세 시각 모두 결측 없음** → 영향 매우 작음. 처리: 해당 변수를 피처로 쓸 경우 **같은 발표분(`ldaps_data_available_kst_dtm`) 내 앞뒤 시각 선형보간**으로 채움(격자 간 보간은 전 격자가 동일하게 빠져 있어 무의미, ffill 대신 시간보간 채택)
+- **LDAPS 상대습도 100% 초과값(최대 109.4%) 클리핑 확정**: 100으로 클리핑, train/test 동일 적용 (물리적 상한 제약, 누수 없음)
 
 ## 실험 기록
 | 날짜 | 실험 | 로컬 Score | 리더보드 | 결론 |
@@ -59,7 +71,6 @@
 
 ## 미해결 질문
 - group_3 데이터 부족(2023년 1년치만 학습) 문제를 모델링 단계에서 어떻게 다룰지
-- test LDAPS 부분 결측 3개 시각을 어떻게 처리할지 (같은 발표분 내 다른 격자 보간 vs 인근 발표분 ffill)
 - 2022-10 라벨 결측(group_1/2 82개)의 정확한 원인 (터빈 점검 기록 등 외부 확인 불가하므로 결측 그대로 두고 학습 제외하는 것으로 잠정 결론)
 
 ## 환경 메모
