@@ -1,11 +1,29 @@
 # HANDOFF — 마지막 갱신: 2026-07-21 (장소: 학교)
 
 ## 현재 위치
-- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택) 완료 → 6-2. `feature-selection` 착수 예정
-- 작업 중 파일: `notebooks/04_model_selection.ipynb` (37개 셀, **민석님이 직접 실행 완료**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 작성 완료)
+- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택), 6-2(`feature-selection`) 완료 → 7단계 심화(튜닝, `05_tuning.ipynb`) 착수 예정
+- 작업 중 파일: `notebooks/04_model_selection.ipynb` (48개 셀 — 1~12절 **민석님이 직접 실행 완료**, 13절은 AI가 `DROPPED_GROUPS` 결정 후 코드만 갱신, **5b(8절 안에 추가된 CatBoost 통합모델 실험)도 이번에 코드만 추가** → **13절과 5b 둘 다 재실행 필요**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 작성 완료, 단 5b 결과는 아직 미반영)
+- 민석님이 "구조 실험도 CatBoost로 봐야 하지 않냐"고 지적 — 타당한 지적이라 8절에 **5b: 통합모델(이용률 타깃) 구조를 CatBoost로도 학습**하는 셀 추가함 (GBDT 3종 중 CatBoost가 개별 최고였는데 구조 실험은 LightGBM만 했었음)
 - **04_model_selection 실행 결과 요약** (validation=2024년, 전체 표는 `reports/04_model_selection.md` 참고):
-  - Score: 1.시간대x월평균 0.4336 / 2.물리파워커브 0.3822(1보다 낮음—GFS 저편향이 파워커브에서 증폭돼서 그런 것으로 분석) / 3.선형회귀 0.5477 / 4a.LightGBM 0.5847 / 4b.XGBoost 0.5871 / 4c.CatBoost 0.5898(GBDT 중 최고) / **5.통합모델(이용률 타깃) 0.5927(전체 최고)** / 6.연도가중 0.5868(효과 미미)
-  - 오류 분석: 야간(0~8시) 오차가 낮 시간대(12~15시)보다 뚜렷하게 큼 — 야간 윈드시어 불안정 이슈와 같은 맥락 가능성, feature-selection/피처 보강에서 검토 필요
+  - 베이스라인 Score: 1.시간대x월평균 0.4336 / 2.물리파워커브 0.3822(1보다 낮음—GFS 저편향이 파워커브에서 증폭돼서 그런 것으로 분석) / 3.선형회귀 0.5477 / 4a.LightGBM 0.5847 / 4b.XGBoost 0.5871 / 4c.CatBoost 0.5898(GBDT 중 최고) / **5.통합모델(이용률 타깃) 0.5927(전체 최고)** / 6.연도가중 0.5868(효과 미미)
+  - 오류 분석: 야간(0~8시) 오차가 낮 시간대(12~15시)보다 뚜렷하게 큼 — 야간 윈드시어 불안정 이슈와 같은 맥락 가능성
+  - **피처 선택**: permutation importance 1위는 `gfs_ws850hpa`(상층풍, 2위의 3배 — 예상 밖 발견). ablation과 permutation importance가 불일치한 사례 발견(LDAPS_원시풍속군 — 속도는 밀도보정풍속으로 대체 가능하지만 방향은 대체 불가능이라 군 단위 판단이 착시를 일으킴). 최종 `DROPPED_GROUPS = ["윈드시어_알파", "허브풍속_파생(ws_hub_gfs)"]`만 제거, 52→50개 피처로 `train_features_v2.parquet` 확정(단, 13절 재실행 필요 — 아래 참고)
+
+## 이번 세션에서 한 것 (2026-07-21, 계속 — 피처 선택 결과 반영)
+- 민석님이 `04_model_selection.ipynb` 10~13절을 실행해 상관관계·permutation importance·ablation 결과 전달
+- 결과 분석 후 13절 `DROPPED_GROUPS`를 AI가 확정: `["윈드시어_알파", "허브풍속_파생(ws_hub_gfs)"]`만 제거(2개 피처, 52→50개)
+  - 기계적으로 "-0.005보다 손해 작으면 제거"를 따르지 않은 이유: `LDAPS_원시풍속군`은 ablation 손해가 작았지만(-0.0025), 그 안의 group_3 원시풍속·풍향이 permutation importance에서 개별 최상위권이었음 — 군 안에 섞인 "풍속"(대체 가능)과 "풍향"(대체 불가능)의 성격 차이를 무시하면 안 된다고 판단해 보수적으로 8개 군은 유지
+- `reports/04_model_selection.md` Result/So-what을 실제 수치로 완성 (상관관계 31쌍, permutation importance 상위/하위, ablation 표, 최종 판단 근거)
+- **주의**: 노트북 13절 코드는 AI가 갱신했지만 실행은 안 함 — 민석님이 13절만 다시 실행하면 `train_features_v2.parquet`(50개 피처)가 확정됨
+
+## 이번 세션에서 한 것 (2026-07-21, 계속 — 피처 선택)
+- 민석님이 `04_model_selection.ipynb` 1~9절을 실행해 결과를 전달 → 위 "실행 결과 요약"에 반영, `reports/04_model_selection.md` Result/So-what 작성
+- `feature-selection` 스킬 기준으로 같은 노트북에 10~13절 추가 작성(**AI가 실행하지 않음**, 문법 검사만 통과):
+  - 10절: 52개 피처 상관관계 정리(|corr|>0.98 쌍 확인)
+  - 11절: 최고 구조인 통합모델(pooled_model) 기준 permutation importance(검증셋, 재학습 없이 predict만 반복)
+  - 12절: 52개 피처를 물리적 의미 기준 10개 군(GFS원시풍속/LDAPS원시풍속/공기밀도/안정도·난류/돌풍비율/NWP불일치/발표분내변화율/시간피처/윈드시어알파/허브풍속파생)으로 묶어 군 단위 ablation(제거 후 재학습·비교) — 판정기준: delta > -0.005면 제거 후보
+  - 13절: `DROPPED_GROUPS`(플레이스홀더, ablation 결과 보고 채워야 함)를 반영해 `train_features_v2.parquet`/`test_features_v2.parquet` 저장
+- `reports/04_model_selection.md`에 9~12번 How 항목과 Result 빈 표(상관관계/importance/ablation) 추가
 
 ## 이번 세션에서 한 것 (2026-07-21, 이어서)
 - `03_features.ipynb`의 이전 드라이런 결과를 노트북 저장 출력 vs 디스크 parquet 대조로 내부 정합성 확인(shape, `gfs_shear_alpha` 통계 일치) — 단, 완전히 독립적인 재현 검증은 아니므로 여유 있을 때 민석님이 직접 Restart & Run All 권장
@@ -43,10 +61,12 @@
 - 커널 경로 문제(`wind-forecast_Competition`) 민석님이 직접 수정 완료
 
 ## 다음 할 일 (우선순위순)
-1. `feature-selection` 스킬로 52개 피처(+ws_hub_gfs) 중요도·상관 정리 — 통합모델(이용률 타깃) 구조 기준으로 진행
-2. 여유 되면 "통합모델(이용률 타깃)" 구조를 CatBoost에도 적용해 LightGBM 대비 추가 개선 있는지 확인 (우선순위 낮음)
-3. 오류 분석에서 드러난 야간(0~8시) 오차 문제를 겨냥한 피처 보강 검토 (안정도/경계층 관련)
-4. 위 결정 마친 뒤 `05_tuning.ipynb`로 넘어가 유망 모델만 튜닝
+1. **민석님이 `04_model_selection.ipynb`에서 아래 두 개를 실행**:
+   - 8절의 새 셀 **5b(통합모델을 CatBoost로 재확인)** — 5(LightGBM 통합모델, 0.5927)보다 높은지 확인
+   - **13절**(AI가 `DROPPED_GROUPS`를 채워둠, 위쪽 셀 재실행 불필요) → `train_features_v2.parquet`/`test_features_v2.parquet`(50개 피처) 최종 확정
+2. 5b 결과를 AI에게 전달 → 5와 5b 중 최종 승자를 정하고 `reports/04_model_selection.md` Result/So-what 갱신 (5b가 이기면 피처 선택을 CatBoost 기준으로 다시 볼지도 그때 판단)
+3. `05_tuning.ipynb` 작성 시작 — v2 피처셋 + 최종 승자 구조 위주로 `model-tuning` 스킬 기준 튜닝
+4. `gfs_ws850hpa`(permutation importance 1위, 상층풍)와 관련된 추가 파생 피처(온도이류·지균풍 등)를 `wind-domain-features` 관점에서 검토할 가치 있음 (신규 발견, 우선순위는 05_tuning 이후)
 5. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
 
 ## 02_eda 핵심 발견 (자세한 내용은 reports/02_eda.md)
