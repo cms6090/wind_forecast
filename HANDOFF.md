@@ -1,13 +1,19 @@
 # HANDOFF — 마지막 갱신: 2026-07-21 (장소: 학교)
 
 ## 현재 위치
-- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택), 6-2(`feature-selection`) 완료 → 7단계 심화(튜닝, `05_tuning.ipynb`) 착수 예정
-- 작업 중 파일: `notebooks/04_model_selection.ipynb` (48개 셀 — 1~12절 **민석님이 직접 실행 완료**, 13절은 AI가 `DROPPED_GROUPS` 결정 후 코드만 갱신, **5b(8절 안에 추가된 CatBoost 통합모델 실험)도 이번에 코드만 추가** → **13절과 5b 둘 다 재실행 필요**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 작성 완료, 단 5b 결과는 아직 미반영)
-- 민석님이 "구조 실험도 CatBoost로 봐야 하지 않냐"고 지적 — 타당한 지적이라 8절에 **5b: 통합모델(이용률 타깃) 구조를 CatBoost로도 학습**하는 셀 추가함 (GBDT 3종 중 CatBoost가 개별 최고였는데 구조 실험은 LightGBM만 했었음)
+- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택), 6-2(`feature-selection`) **전부 완료** → 7단계 심화(튜닝, `05_tuning.ipynb`) 착수
+- `notebooks/04_model_selection.ipynb` (48개 셀, **1~13절 + 5b 전부 민석님이 직접 실행 완료**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 최종 수치로 완성)
+- **최종 결론: "통합모델(이용률 타깃) + CatBoost" 구조(Score 0.5971)가 전체 최고점** — 민석님이 "구조 실험도 CatBoost로 봐야 하지 않냐"고 지적해서 5b로 추가 확인함. LightGBM 통합모델(0.5927)보다 +0.0044 더 좋았음(알고리즘 효과 + 구조 효과가 상쇄되지 않고 함께 작동)
 - **04_model_selection 실행 결과 요약** (validation=2024년, 전체 표는 `reports/04_model_selection.md` 참고):
-  - 베이스라인 Score: 1.시간대x월평균 0.4336 / 2.물리파워커브 0.3822(1보다 낮음—GFS 저편향이 파워커브에서 증폭돼서 그런 것으로 분석) / 3.선형회귀 0.5477 / 4a.LightGBM 0.5847 / 4b.XGBoost 0.5871 / 4c.CatBoost 0.5898(GBDT 중 최고) / **5.통합모델(이용률 타깃) 0.5927(전체 최고)** / 6.연도가중 0.5868(효과 미미)
+  - 베이스라인 Score: 1.시간대x월평균 0.4336 / 2.물리파워커브 0.3822(1보다 낮음—GFS 저편향이 파워커브에서 증폭돼서 그런 것으로 분석) / 3.선형회귀 0.5477 / 4a.LightGBM 0.5847 / 4b.XGBoost 0.5871 / 4c.CatBoost 0.5898 / 5.통합모델(LightGBM) 0.5927 / **5b.통합모델(CatBoost) 0.5971(최종 최고)** / 6.연도가중 0.5868(효과 미미)
   - 오류 분석: 야간(0~8시) 오차가 낮 시간대(12~15시)보다 뚜렷하게 큼 — 야간 윈드시어 불안정 이슈와 같은 맥락 가능성
-  - **피처 선택**: permutation importance 1위는 `gfs_ws850hpa`(상층풍, 2위의 3배 — 예상 밖 발견). ablation과 permutation importance가 불일치한 사례 발견(LDAPS_원시풍속군 — 속도는 밀도보정풍속으로 대체 가능하지만 방향은 대체 불가능이라 군 단위 판단이 착시를 일으킴). 최종 `DROPPED_GROUPS = ["윈드시어_알파", "허브풍속_파생(ws_hub_gfs)"]`만 제거, 52→50개 피처로 `train_features_v2.parquet` 확정(단, 13절 재실행 필요 — 아래 참고)
+  - **피처 선택**(통합모델·LightGBM 기준으로 계산, 5b 확정 전): permutation importance 1위는 `gfs_ws850hpa`(상층풍, 2위의 3배 — 예상 밖 발견). ablation과 permutation importance가 불일치한 사례 발견(LDAPS_원시풍속군 — 속도는 밀도보정풍속으로 대체 가능하지만 방향은 대체 불가능이라 군 단위 판단이 착시를 일으킴). 최종 `DROPPED_GROUPS = ["윈드시어_알파", "허브풍속_파생(ws_hub_gfs)"]`만 제거, **`train_features_v2.parquet` (26304,54=50개 피처+dtm+라벨3) / `test_features_v2.parquet` (8760,52) 저장 완료**
+  - **주의**: 피처 선택은 LightGBM 기준으로 했는데 최종 승자는 CatBoost다. GBDT끼리는 중요 피처가 대체로 비슷하다고 보고 지금은 재작업하지 않기로 함 — `05_tuning`에서 v2(50개) 기준 CatBoost 성능이 v1(52개) 대비 눈에 띄게 나빠지면 그때 CatBoost 기준으로 재검토
+
+## 이번 세션에서 한 것 (2026-07-21, 계속 — 5b 실행 결과 반영 및 최종 확정)
+- 민석님이 8절의 5b(CatBoost 통합모델)와 13절(피처셋 확정)을 실행해 결과 전달
+- 5b가 0.5971로 전체 최고점 확정 → `05_tuning.ipynb`로 넘길 최종 구조를 "통합모델(이용률 타깃) + CatBoost + v2 피처셋(50개)"로 결정
+- `reports/04_model_selection.md` Result/So-what을 5b 결과로 최종 갱신, `train_features_v2.parquet`/`test_features_v2.parquet` 저장 shape 확인 완료
 
 ## 이번 세션에서 한 것 (2026-07-21, 계속 — 피처 선택 결과 반영)
 - 민석님이 `04_model_selection.ipynb` 10~13절을 실행해 상관관계·permutation importance·ablation 결과 전달
@@ -61,13 +67,10 @@
 - 커널 경로 문제(`wind-forecast_Competition`) 민석님이 직접 수정 완료
 
 ## 다음 할 일 (우선순위순)
-1. **민석님이 `04_model_selection.ipynb`에서 아래 두 개를 실행**:
-   - 8절의 새 셀 **5b(통합모델을 CatBoost로 재확인)** — 5(LightGBM 통합모델, 0.5927)보다 높은지 확인
-   - **13절**(AI가 `DROPPED_GROUPS`를 채워둠, 위쪽 셀 재실행 불필요) → `train_features_v2.parquet`/`test_features_v2.parquet`(50개 피처) 최종 확정
-2. 5b 결과를 AI에게 전달 → 5와 5b 중 최종 승자를 정하고 `reports/04_model_selection.md` Result/So-what 갱신 (5b가 이기면 피처 선택을 CatBoost 기준으로 다시 볼지도 그때 판단)
-3. `05_tuning.ipynb` 작성 시작 — v2 피처셋 + 최종 승자 구조 위주로 `model-tuning` 스킬 기준 튜닝
-4. `gfs_ws850hpa`(permutation importance 1위, 상층풍)와 관련된 추가 파생 피처(온도이류·지균풍 등)를 `wind-domain-features` 관점에서 검토할 가치 있음 (신규 발견, 우선순위는 05_tuning 이후)
-5. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
+1. `05_tuning.ipynb` 작성 시작 — **"통합모델(이용률 타깃) + CatBoost + v2 피처셋(50개)"**을 출발점으로 `model-tuning` 스킬 기준 하이퍼파라미터 탐색
+2. `gfs_ws850hpa`(permutation importance 1위, 상층풍)와 관련된 추가 파생 피처(온도이류·지균풍 등)를 `wind-domain-features` 관점에서 검토할 가치 있음 (신규 발견, 우선순위는 05_tuning 이후)
+3. `05_tuning`에서 v2(50개) 피처셋 기준 CatBoost 성능이 v1(52개) 대비 눈에 띄게 나빠지면, 피처 선택을 CatBoost 기준으로 재검토 (지금은 보류)
+4. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
 
 ## 02_eda 핵심 발견 (자세한 내용은 reports/02_eda.md)
 - **그룹-터빈 매핑 최종 확증**: SCADA 합계 vs 라벨 상관 = 0.9998/0.9998/0.9966
