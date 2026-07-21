@@ -1,7 +1,10 @@
 # HANDOFF — 마지막 갱신: 2026-07-21 (장소: 학교)
 
 ## 현재 위치
-- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택), 6-2(`feature-selection`) **전부 완료** → 7단계 심화(튜닝, `05_tuning.ipynb`) 착수
+- 로드맵 단계: 1~4(전처리·EDA), 6(피처 엔지니어링), 5/7(베이스라인·모델 선택), 6-2(`feature-selection`) 완료 → 8. 튜닝(`05_tuning.ipynb`) **작성 완료, N_TRIALS=5로 시험 실행함, 본 탐색은 집에서 진행 예정**
+- 작업 중 파일: `notebooks/05_tuning.ipynb` (21개 셀, 민석님이 `N_TRIALS=5`로 시험 실행 완료 — 시간 가늠용, 본 탐색 아님), `reports/05_tuning.md` (Why/How 작성, Result/So-what은 본 탐색 후 채울 자리)
+- **N_TRIALS=5 시험 실행 결과(참고용, 실제 채택 금지)**: 기본값 3-fold 평균 0.5908(fold별 0.5679/0.5945/0.6101) vs 5-trial 최선 파라미터가 seed 평균 0.5895로 **오히려 더 나쁨**(-0.0013). 원인 분석 완료: Optuna TPESampler는 기본 `n_startup_trials=10`이라 5개는 전부 순수 무작위 단계라 사실상 랜덤서치 5회에 불과했고, 그마저 seed 1개(42) 기준 "최선"(0.5910)이 seed 3개 재검증에서 노이즈로 판명(fold 간 변동폭 0.043이 5-trial 최선-기본값 차이 0.0002보다 훨씬 큼) — **seed 안정성 검증이 의도대로 가짜 개선을 걸러낸 사례**. sqlite(`data/processed/optuna_catboost_pooled.db`)에 5개 trial 누적 저장됨 → 다음 실행 시 이어서 탐색됨
+- 딥러닝(CNN/RNN/Attention)·복잡한 앙상블·NMAE/FICR 전용모델 분리 여부를 민석님이 질문 → 지금 단계에서는 비추천/보류로 답변(근거: 데이터 규모 2.6만 행, leakage 제약상 자기회귀 불가, GBDT가 이미 문제 구조와 잘 맞음). 앙상블은 `ensemble-final` 단계(9~10)에서, 딥러닝은 오류 분석에서 구조적 한계가 보일 때, FICR은 분위수회귀 등 `timeseries-validation` 스킬에 이미 있는 방법으로 접근하기로 함
 - `notebooks/04_model_selection.ipynb` (48개 셀, **1~13절 + 5b 전부 민석님이 직접 실행 완료**), `reports/04_model_selection.md` (Why/How/Result/So-what 전부 최종 수치로 완성)
 - **최종 결론: "통합모델(이용률 타깃) + CatBoost" 구조(Score 0.5971)가 전체 최고점** — 민석님이 "구조 실험도 CatBoost로 봐야 하지 않냐"고 지적해서 5b로 추가 확인함. LightGBM 통합모델(0.5927)보다 +0.0044 더 좋았음(알고리즘 효과 + 구조 효과가 상쇄되지 않고 함께 작동)
 - **04_model_selection 실행 결과 요약** (validation=2024년, 전체 표는 `reports/04_model_selection.md` 참고):
@@ -9,6 +12,16 @@
   - 오류 분석: 야간(0~8시) 오차가 낮 시간대(12~15시)보다 뚜렷하게 큼 — 야간 윈드시어 불안정 이슈와 같은 맥락 가능성
   - **피처 선택**(통합모델·LightGBM 기준으로 계산, 5b 확정 전): permutation importance 1위는 `gfs_ws850hpa`(상층풍, 2위의 3배 — 예상 밖 발견). ablation과 permutation importance가 불일치한 사례 발견(LDAPS_원시풍속군 — 속도는 밀도보정풍속으로 대체 가능하지만 방향은 대체 불가능이라 군 단위 판단이 착시를 일으킴). 최종 `DROPPED_GROUPS = ["윈드시어_알파", "허브풍속_파생(ws_hub_gfs)"]`만 제거, **`train_features_v2.parquet` (26304,54=50개 피처+dtm+라벨3) / `test_features_v2.parquet` (8760,52) 저장 완료**
   - **주의**: 피처 선택은 LightGBM 기준으로 했는데 최종 승자는 CatBoost다. GBDT끼리는 중요 피처가 대체로 비슷하다고 보고 지금은 재작업하지 않기로 함 — `05_tuning`에서 v2(50개) 기준 CatBoost 성능이 v1(52개) 대비 눈에 띄게 나빠지면 그때 CatBoost 기준으로 재검토
+
+## 이번 세션에서 한 것 (2026-07-21, 계속 — 05_tuning.ipynb 작성)
+- `model-tuning` 스킬 기준으로 `notebooks/05_tuning.ipynb` 작성 (21개 셀, **AI가 실행하지 않음**):
+  - **확장 윈도우 3-fold CV 도입**: fold1(~2023-06 학습/2023-07~12 검증), fold2(~2023-12/2024-01~06), fold3(~2024-06/2024-07~12) — 04번은 단일 fold였는데 튜닝 단계부터는 "단일 fold 최적화 금지" 원칙(스킬 1절)에 따라 3-fold로 전환
+  - v2 피처셋(50개) + 통합모델(이용률 타깃) + CatBoost 구조를 함수화(`train_and_score_fold`/`cv_score`)
+  - 튜닝 전 기준점을 3-fold CV로 재계산(04번 0.5971은 단일 fold라 직접 비교 불가)
+  - CatBoost 탐색 범위를 LightGBM 스킬 표에 대응: `learning_rate`/`depth`(num_leaves 대응)/`min_data_in_leaf`/`rsm`(feature_fraction 대응)/`subsample`+`bootstrap_type=Bernoulli`(bagging_fraction 대응)/`l2_leaf_reg`
+  - Optuna(TPE) 탐색, `N_TRIALS=30`(상수로 노출, 조절 가능), sqlite study 저장으로 이어서 탐색 가능
+  - seed 3개 안정성 확인 + 튜닝 전후 비교표
+- `reports/05_tuning.md` 골격 작성 (Why/How 확정, Result/So-what은 빈 자리)
 
 ## 이번 세션에서 한 것 (2026-07-21, 계속 — 5b 실행 결과 반영 및 최종 확정)
 - 민석님이 8절의 5b(CatBoost 통합모델)와 13절(피처셋 확정)을 실행해 결과 전달
@@ -67,10 +80,13 @@
 - 커널 경로 문제(`wind-forecast_Competition`) 민석님이 직접 수정 완료
 
 ## 다음 할 일 (우선순위순)
-1. `05_tuning.ipynb` 작성 시작 — **"통합모델(이용률 타깃) + CatBoost + v2 피처셋(50개)"**을 출발점으로 `model-tuning` 스킬 기준 하이퍼파라미터 탐색
-2. `gfs_ws850hpa`(permutation importance 1위, 상층풍)와 관련된 추가 파생 피처(온도이류·지균풍 등)를 `wind-domain-features` 관점에서 검토할 가치 있음 (신규 발견, 우선순위는 05_tuning 이후)
-3. `05_tuning`에서 v2(50개) 피처셋 기준 CatBoost 성능이 v1(52개) 대비 눈에 띄게 나빠지면, 피처 선택을 CatBoost 기준으로 재검토 (지금은 보류)
-4. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
+1. **(집에서) `05_tuning.ipynb`의 `N_TRIALS`를 30 정도로 올려서 재실행** — sqlite에 5개 trial이 이미 저장돼 있어서 처음부터 다시 하는 게 아니라 이어서 탐색됨(누적 35개). 5-trial 시험 실행에서 걸린 시간을 참고해 필요하면 숫자 조절
+2. 결과가 나오면 **`study.best_value`(단일 seed) 말고 반드시 seed 3개 재검증(7절) 결과를 기준으로 판단** — 5-trial 사례처럼 단일 seed "최선"은 노이즈일 수 있음
+3. 실행 결과(튜닝 전후 비교, 최적 파라미터, seed 안정성)를 AI에게 전달 → `reports/05_tuning.md` Result/So-what 완성
+4. 튜닝으로도 개선이 없다면(정직하게) 피처/오류 분석 쪽으로 방향 전환 검토 (`model-tuning` 스킬 4절: "튜닝으로 짜낸 0.001보다 피처 하나의 0.01이 크다")
+5. `gfs_ws850hpa`(permutation importance 1위, 상층풍)와 관련된 추가 파생 피처(온도이류·지균풍 등)를 `wind-domain-features` 관점에서 검토할 가치 있음 (신규 발견, 우선순위는 05_tuning 이후)
+6. `05_tuning`에서 v2(50개) 피처셋 기준 CatBoost 성능이 v1(52개) 대비 눈에 띄게 나빠지면, 피처 선택을 CatBoost 기준으로 재검토 (지금은 보류)
+7. 여유 있으면 `notebooks/03_features.ipynb`도 Restart & Run All로 독립 재현 확인(우선순위 낮음, 이미 내부 정합성은 확인됨)
 
 ## 02_eda 핵심 발견 (자세한 내용은 reports/02_eda.md)
 - **그룹-터빈 매핑 최종 확증**: SCADA 합계 vs 라벨 상관 = 0.9998/0.9998/0.9966
