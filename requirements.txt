@@ -12,3 +12,4 @@ ipykernel
 openpyxl
 optuna
 tqdm
+torch
