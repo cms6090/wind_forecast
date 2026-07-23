@@ -36,7 +36,8 @@ wind_foreset_codex/
 │   ├── 02_eda.ipynb
 │   ├── 03_features.ipynb
 │   ├── 04_model_selection.ipynb
-│   ├── 05_tuning.ipynb
+│   ├── 05_tuning_1.ipynb  # 튜닝 0~18절 (하나로 합치기엔 파일이 너무 커져 분할)
+│   ├── 05_tuning_2.ipynb  # 튜닝 19절~ (신규 절은 이 파일에 이어서 작성)
 │   ├── train.ipynb        # 2차 평가 제출용 (분리 필수)
 │   └── inference.ipynb    # 2차 평가 제출용 (분리 필수)
 ├── reports/               # 단계별 분석 보고서

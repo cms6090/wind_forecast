@@ -41,6 +41,48 @@ class MLP(nn.Module):
         return torch.sigmoid(self.net(x).squeeze(-1))
 
 
+class TabAttention(nn.Module):
+    """FT-Transformer(표 데이터 전용 트랜스포머, 2021) 축소판.
+
+    수치 피처 하나하나를 "토큰"(문장의 단어 하나에 대응하는 단위)으로 취급한다.
+    피처 i의 스칼라값 v_i는 학습되는 (weight_i, bias_i)로 v_i*weight_i+bias_i라는
+    d_model 차원 벡터가 되고, group_id는 임베딩 테이블에서 자기 토큰을 받는다.
+    맨 앞에 붙는 [CLS] 토큰(문장 전체 의미를 요약하는 자리처럼, 여기서는 전체
+    피처 조합을 요약하는 자리)이 self-attention을 거친 뒤 그 출력을 최종 예측에 쓴다.
+
+    입력 x의 마지막 열은 group_id(정수, float로 저장)이고 나머지 열이 수치 피처다
+    (build_attn_features가 이 형식으로 만든다) — MLP용 build_features의 원-핫
+    이어붙이기와 다른 이유는, forward에서 group_id를 원-핫이 아니라 임베딩
+    테이블 인덱스로 따로 떼어 써야 하기 때문이다.
+    """
+
+    def __init__(self, num_features: int, n_groups: int = 3, d_model: int = 32, n_heads: int = 4, n_layers: int = 1, dropout: float = 0.15):
+        super().__init__()
+        self.num_features = num_features
+        self.num_weight = nn.Parameter(torch.randn(num_features, d_model) * 0.02)
+        self.num_bias = nn.Parameter(torch.zeros(num_features, d_model))
+        self.group_emb = nn.Embedding(n_groups, d_model)
+        self.cls = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        layer = nn.TransformerEncoderLayer(
+            d_model, n_heads, dim_feedforward=d_model * 4, dropout=dropout,
+            activation="gelu", batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, n_layers)
+        self.head = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        num_x = x[:, :self.num_features]
+        group_idx = x[:, self.num_features].long()
+
+        tokens_num = num_x.unsqueeze(-1) * self.num_weight + self.num_bias  # (B, F, d_model)
+        tokens_grp = self.group_emb(group_idx).unsqueeze(1)  # (B, 1, d_model)
+        cls = self.cls.expand(x.shape[0], -1, -1)
+
+        seq = torch.cat([cls, tokens_grp, tokens_num], dim=1)
+        out = self.encoder(seq)
+        return torch.sigmoid(self.head(out[:, 0]).squeeze(-1))
+
+
 def fit_standardizer(x: np.ndarray):
     """train 파트에서만 fit (leakage-guard 원칙)."""
     mu = x.mean(axis=0)
@@ -114,14 +156,22 @@ def train_mlp(
     hidden=(256, 256), dropout: float = 0.15,
     lr: float = 1e-3, weight_decay: float = 1e-4,
     max_epochs: int = 300, patience: int = 30, verbose: bool = False,
+    model: nn.Module | None = None,
 ):
     """전체 배치(full-batch)로 학습한다. FICR 항이 "전체 합 대비 비율"이라 미니배치로
     쪼개면 그 비율 추정이 흔들리기 때문이다. 조기 종료는 손실(soft)이 아니라 실제
-    채점 방식(true_score)의 검증 성능으로 판단한다 — 최적화 목표와 감시 지표를 분리."""
+    채점 방식(true_score)의 검증 성능으로 판단한다 — 최적화 목표와 감시 지표를 분리.
+
+    `model`을 안 넘기면 기존과 완전히 동일하게 MLP(input_dim, hidden, dropout)를 만든다
+    (05_tuning 14·18절 재실행 결과에 영향 없음). TabAttention 등 다른 구조를 쓰려면
+    미리 만든 인스턴스를 `model`로 넘기면 이 학습 루프(미분 가능한 FICR 손실, 조기 종료)를
+    그대로 재사용한다."""
     set_seed(seed)
     device = torch.device("cpu")
 
-    model = MLP(input_dim, hidden=hidden, dropout=dropout).to(device)
+    if model is None:
+        model = MLP(input_dim, hidden=hidden, dropout=dropout)
+    model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_epochs)
 
