@@ -115,38 +115,85 @@ def build_features(df: pd.DataFrame, feature_cols, mu=None, sd=None, n_groups: i
     return x, mu, sd
 
 
-def soft_metric_loss(pred_util, actual_util, actual_kwh, is_scored, T: float = 0.006):
+def soft_metric_loss(pred_util, actual_util, actual_kwh, is_scored, group_id, T: float = 0.006, n_groups: int = 3):
     """score = 0.5*(1-NMAE) + 0.5*FICR 를 시그모이드로 미분 가능하게 근사한 것의 음수(손실).
 
     price_soft(e)는 e=0 근처에서 4, e=0.06~0.08 사이에서 3, e>0.08에서 0에 가까워지는
     계단 함수를 시그모이드 두 개의 합으로 부드럽게 흉내낸다. T가 작을수록 실제 계단에
     가깝지만 기울기가 날카로워져 학습이 불안정해진다(T_soft 스윕으로 절충점을 찾는다).
+
+    **그룹별 평균 구조**: 대회 공식 지표(src/metric.py)는 그룹마다 NMAE·FICR을 따로 구해
+    3개 그룹 점수를 표본 수와 무관하게 1/3씩 균등 평균한다. 이전 버전은 세 그룹을 한 덩어리로
+    합쳐(pooled) 계산해, 채점 표본이 적은 group_3(라벨이 2023~로 짧음)이 표본 수만큼
+    과소가중됐다 — 하필 group_3은 최약체이자 블렌드에서 MLP를 100% 쓰는 그룹이라 손실을
+    지표에 정확히 맞추려면 그룹별 평균이 필수다. group_id는 각 행의 그룹 번호(0/1/2).
     """
     pred_s = pred_util[is_scored]
     actual_s = actual_util[is_scored]
     kwh_s = actual_kwh[is_scored]
+    grp_s = group_id[is_scored]
 
     e = (pred_s - actual_s).abs()
-    nmae_term = e.mean()
-
     price_soft = 3.0 * torch.sigmoid((0.08 - e) / T) + torch.sigmoid((0.06 - e) / T)
-    ficr_soft = (kwh_s * price_soft).sum() / (4.0 * kwh_s.sum())
 
-    score = 0.5 * (1.0 - nmae_term) + 0.5 * ficr_soft
+    group_scores = []
+    for g in range(n_groups):
+        m = grp_s == g
+        if not bool(m.any()):
+            continue  # 이 배치(fold)에 해당 그룹 채점 표본이 없으면 건너뛴다
+        nmae_g = e[m].mean()
+        ficr_g = (kwh_s[m] * price_soft[m]).sum() / (4.0 * kwh_s[m].sum())
+        group_scores.append(0.5 * (1.0 - nmae_g) + 0.5 * ficr_g)
+
+    score = torch.stack(group_scores).mean()  # 표본 수 무관 1/3 균등 평균
     return -score
 
 
-def true_score(pred_util, actual_util, actual_kwh, is_scored) -> float:
-    """미분 불가능한 실제 채점 방식(진짜 계단 함수) — 조기 종료·모니터링 전용."""
+def true_score(pred_util, actual_util, actual_kwh, is_scored, group_id, n_groups: int = 3) -> float:
+    """미분 불가능한 실제 채점 방식(진짜 계단 함수) — 조기 종료·모니터링 전용.
+
+    soft_metric_loss와 동일하게 그룹별 NMAE·FICR을 따로 구해 1/3 균등 평균한다
+    (감시 지표가 최적화 목표와 같은 구조여야 조기 종료가 진짜 지표를 겨냥한다).
+    """
     pred_s = pred_util[is_scored].detach().cpu().numpy()
     actual_s = actual_util[is_scored].detach().cpu().numpy()
     kwh_s = actual_kwh[is_scored].detach().cpu().numpy()
+    grp_s = group_id[is_scored].detach().cpu().numpy()
 
     e = np.abs(pred_s - actual_s)
-    nmae = float(e.mean())
     price = np.select([e <= 0.06, e <= 0.08], [4.0, 3.0], default=0.0)
-    ficr = float(np.sum(kwh_s * price) / (4.0 * np.sum(kwh_s)))
-    return 0.5 * (1 - nmae) + 0.5 * ficr
+
+    group_scores = []
+    for g in range(n_groups):
+        m = grp_s == g
+        if not m.any():
+            continue
+        nmae_g = float(e[m].mean())
+        ficr_g = float(np.sum(kwh_s[m] * price[m]) / (4.0 * np.sum(kwh_s[m])))
+        group_scores.append(0.5 * (1 - nmae_g) + 0.5 * ficr_g)
+
+    return float(np.mean(group_scores))
+
+
+def _resolve_group_id(X, group_id, n_groups: int) -> np.ndarray:
+    """손실 함수에 넘길 그룹 번호(0..n_groups-1) 배열을 확정한다.
+
+    group_id가 주어지면 그대로 쓰고, None이면 입력 피처 X의 마지막 n_groups열이
+    build_features가 붙인 원-핫(grp_0..grp_{n-1})이라는 규약에 따라 argmax로 복원한다.
+    원-핫이 아닌 형태(각 행 합이 1이 아니거나 값이 0/1이 아님)면 조용히 틀린 그룹을
+    쓰지 않도록 에러를 낸다 — 그 경우 호출부에서 group_id를 명시적으로 넘겨야 한다
+    (예: 마지막 열이 정수 group_id인 TabAttention 입력).
+    """
+    if group_id is not None:
+        return np.asarray(group_id).astype(np.int64)
+    tail = np.asarray(X)[:, -n_groups:]
+    is_onehot = bool(np.all((tail == 0) | (tail == 1))) and np.allclose(tail.sum(axis=1), 1.0)
+    if not is_onehot:
+        raise ValueError(
+            f"group_id를 자동 복원할 수 없습니다: X의 마지막 {n_groups}열이 원-핫이 아닙니다. "
+            "train_mlp/train_mlp_full에 group_id 인자를 직접 넘기세요."
+        )
+    return tail.argmax(axis=1).astype(np.int64)
 
 
 def train_mlp(
@@ -157,6 +204,7 @@ def train_mlp(
     lr: float = 1e-3, weight_decay: float = 1e-4,
     max_epochs: int = 300, patience: int = 30, verbose: bool = False,
     model: nn.Module | None = None,
+    group_id=None, early_group_id=None, n_groups: int = 3,
 ):
     """전체 배치(full-batch)로 학습한다. FICR 항이 "전체 합 대비 비율"이라 미니배치로
     쪼개면 그 비율 추정이 흔들리기 때문이다. 조기 종료는 손실(soft)이 아니라 실제
@@ -165,9 +213,16 @@ def train_mlp(
     `model`을 안 넘기면 기존과 완전히 동일하게 MLP(input_dim, hidden, dropout)를 만든다
     (05_tuning 14·18절 재실행 결과에 영향 없음). TabAttention 등 다른 구조를 쓰려면
     미리 만든 인스턴스를 `model`로 넘기면 이 학습 루프(미분 가능한 FICR 손실, 조기 종료)를
-    그대로 재사용한다."""
+    그대로 재사용한다.
+
+    `group_id`/`early_group_id`는 그룹별 지표 계산에 쓰는 각 행의 그룹 번호(0/1/2). None이면
+    fit_X/early_X의 마지막 n_groups열(원-핫)에서 자동 복원한다 — MLP 경로는 그대로 두면 되고,
+    원-핫이 아닌 입력(TabAttention)만 직접 넘기면 된다."""
     set_seed(seed)
     device = torch.device("cpu")
+
+    fit_group = _resolve_group_id(fit_X, group_id, n_groups)
+    early_group = _resolve_group_id(early_X, early_group_id, n_groups)
 
     if model is None:
         model = MLP(input_dim, hidden=hidden, dropout=dropout)
@@ -179,11 +234,13 @@ def train_mlp(
     fit_util_t = torch.tensor(fit_util, dtype=torch.float32, device=device)
     fit_kwh_t = torch.tensor(fit_kwh, dtype=torch.float32, device=device)
     fit_scored_t = torch.tensor(fit_scored, dtype=torch.bool, device=device)
+    fit_group_t = torch.tensor(fit_group, dtype=torch.long, device=device)
 
     early_X_t = torch.tensor(early_X, dtype=torch.float32, device=device)
     early_util_t = torch.tensor(early_util, dtype=torch.float32, device=device)
     early_kwh_t = torch.tensor(early_kwh, dtype=torch.float32, device=device)
     early_scored_t = torch.tensor(early_scored, dtype=torch.bool, device=device)
+    early_group_t = torch.tensor(early_group, dtype=torch.long, device=device)
 
     best_score = -np.inf
     best_state = None
@@ -194,7 +251,7 @@ def train_mlp(
         model.train()
         opt.zero_grad()
         pred = model(fit_X_t)
-        loss = soft_metric_loss(pred, fit_util_t, fit_kwh_t, fit_scored_t, T=T_soft)
+        loss = soft_metric_loss(pred, fit_util_t, fit_kwh_t, fit_scored_t, fit_group_t, T=T_soft, n_groups=n_groups)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -203,7 +260,7 @@ def train_mlp(
         model.eval()
         with torch.no_grad():
             early_pred = model(early_X_t)
-            val_score = true_score(early_pred, early_util_t, early_kwh_t, early_scored_t)
+            val_score = true_score(early_pred, early_util_t, early_kwh_t, early_scored_t, early_group_t, n_groups=n_groups)
 
         if val_score > best_score:
             best_score = val_score
@@ -228,15 +285,21 @@ def train_mlp_full(
     input_dim: int, epochs: int, seed: int = 42, T_soft: float = 0.006,
     hidden=(256, 256), dropout: float = 0.15,
     lr: float = 1e-3, weight_decay: float = 1e-4,
+    group_id=None, n_groups: int = 3,
 ):
     """검증셋 없이 고정된 epoch 수만큼 전체 데이터로 학습한다(early stopping 없음).
 
     train.ipynb에서 seed 앙상블 최종 모델을 만들 때 쓴다. epoch 수는 CatBoost의
     `FINAL_ITERATIONS`와 같은 방식 — 3-fold CV에서 관측된 `best_epoch`(train_mlp가
     반환하는 값)의 평균×1.05를 미리 정해서 이 함수에 넘긴다.
+
+    `group_id`는 그룹별 손실 계산용 각 행의 그룹 번호(0/1/2). None이면 fit_X의 마지막
+    n_groups열(원-핫)에서 자동 복원한다.
     """
     set_seed(seed)
     device = torch.device("cpu")
+
+    fit_group = _resolve_group_id(fit_X, group_id, n_groups)
 
     model = MLP(input_dim, hidden=hidden, dropout=dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -246,12 +309,13 @@ def train_mlp_full(
     util_t = torch.tensor(fit_util, dtype=torch.float32, device=device)
     kwh_t = torch.tensor(fit_kwh, dtype=torch.float32, device=device)
     scored_t = torch.tensor(fit_scored, dtype=torch.bool, device=device)
+    group_t = torch.tensor(fit_group, dtype=torch.long, device=device)
 
     model.train()
     for _ in range(epochs):
         opt.zero_grad()
         pred = model(X_t)
-        loss = soft_metric_loss(pred, util_t, kwh_t, scored_t, T=T_soft)
+        loss = soft_metric_loss(pred, util_t, kwh_t, scored_t, group_t, T=T_soft, n_groups=n_groups)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
