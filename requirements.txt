@@ -2,7 +2,7 @@ pandas
 numpy
 pyarrow
 scikit-learn
-lightgbm
+lightgbm==4.6.0  # 외부 파이프라인(07_external_*) exp017 비트단위 재현 조건, config.json 명시 버전
 xgboost
 catboost
 matplotlib

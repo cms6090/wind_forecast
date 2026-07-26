@@ -30,18 +30,20 @@ wind_foreset_codex/
 │   └── sample_submission.csv
 ├── src/
 │   ├── metric.py          # 대회 공식 평가 산식 (수정 금지)
-│   └── submission.py      # validate_submission() — 제출 전 필수 검증
+│   ├── submission.py      # build_submission()/save_submission()/validate_submission() — 제출 전 필수 검증
+│   └── nn.py              # MLP(LightGBM 분위수회귀와 블렌드되는 신경망) 구조·FICR 손실·학습 루프
 ├── notebooks/
-│   ├── 01_preprocessing.ipynb
-│   ├── 02_eda.ipynb
-│   ├── 03_features.ipynb
-│   ├── 04_model_selection.ipynb
-│   ├── 05_tuning_1.ipynb  # 튜닝 0~18절 (하나로 합치기엔 파일이 너무 커져 분할)
-│   ├── 05_tuning_2.ipynb  # 튜닝 19절~ (신규 절은 이 파일에 이어서 작성)
-│   ├── train.ipynb        # 2차 평가 제출용 (분리 필수)
-│   └── inference.ipynb    # 2차 평가 제출용 (분리 필수)
-├── reports/               # 단계별 분석 보고서
-└── submissions/           # 제출 CSV (날짜_버전_설명.csv)
+│   ├── 01_preprocessing.ipynb    # 원본 CSV 로딩 → pivot → 조인 → parquet 캐시
+│   ├── 02_eda.ipynb              # 이용률·파워커브·결측·격자상관 등 데이터 탐색
+│   ├── 03_features.ipynb         # 179개 피처(허브고도 외삽·파워커브·결빙 등) 생성
+│   ├── 04_model_selection.ipynb  # 8개 후보(Ridge/LightGBM/XGBoost/CatBoost 등) 공정 비교 → LightGBM 채택
+│   ├── 05_tuning.ipynb           # 그룹별 τ·actual가중·Optuna 튜닝(산식-인지 학습)
+│   ├── train.ipynb               # 2차 평가 제출용 — 그룹별 완전분리 LightGBM+MLP 블렌드 학습
+│   └── inference.ipynb           # 2차 평가 제출용 — train.ipynb 모델 로딩·예측·제출 파일 생성
+├── reports/               # 단계별 분석 보고서 (01_preprocessing/02_eda/03_features/04_model_selection/05_tuning/train)
+├── models/                # 학습된 모델 아티팩트 (git 제외, final/ 하위에 LightGBM·MLP·config.json)
+├── submissions/           # 제출 CSV (날짜_버전_설명.csv)
+└── archive/               # 이전 구조 보존 — notebooks/(01~06 탐색+구v5 train/inference), reports/, src/nn_v5.py, models/
 ```
 
 ## 3. 진행 로드맵 (반드시 이 순서)

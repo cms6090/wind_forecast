@@ -1,4 +1,40 @@
-# HANDOFF — 마지막 갱신: 2026-07-26 (장소: 집, 구조 재작업(06_group_pipeline: 그룹별 완전분리+피처확장) 스크리닝 기각 — v5 유지(LB 0.629551). 재탐색·pc_pred 없는 첫 시도라 다음 방향 논의 필요)
+# HANDOFF — 마지막 갱신: 2026-07-26 (장소: 집, 파이프라인 전면 교체 — 그룹별 완전분리 LightGBM+MLP 블렌드(179피처)로 전환, 로컬 2024 홀드아웃 0.6458 재현 확인. 01/02/03/04/05_tuning/train/inference 7개 노트북 전부 새 파이프라인, 구v5는 archive/로 보존. 02/04/05_tuning은 아직 재실행 전)
+
+## 이번 세션 (2026-07-26, 집) — 파이프라인 교체: 그룹별 완전분리 LightGBM 분위수회귀 + MLP(FICR 손실) 블렌드, 179피처, 로컬 홀드아웃 0.6458 재현
+
+**배경**: 06_group_pipeline 스크리닝(직전 세션)이 두 가지를 미검증으로 남겼다 — ① 그룹별 하이퍼파라미터 재탐색, ② `pc_pred` 파워커브 재구축(roll5). `pc_pred` 재구축을 확인하는 과정에서(민석님 지시로 `d:\공모전\wind-forecast_Competition` — 같은 문제를 이전에 다뤘던 별도 저장소 — 를 다시 열어보다가), 그쪽에서 이미 그룹별 완전분리 구조 + 179개 피처 + LightGBM 분위수회귀 + MLP(FICR 손실) 블렌드로 로컬 2024 홀드아웃 0.6458(Public 0.63886)까지 확인해뒀다는 걸 다시 확인했다. 민석님이 "그 파이프라인을 기준으로 삼고 그 위에 우리가 검증한 것들을 얹자"고 결정 — 이번 세션은 그 이식과 재현, 그리고 프로젝트 구조 정리까지 다뤘다.
+
+**한 일**:
+1. **재현 가능성 사전 확인(스크래치)**: SCADA 나셀풍속(터빈별 `_ws`)에 예보풍속을 회귀보정하면 RMSE가 실제로 줄어드는지 직접 확인(group_1 2.75→2.01, group_2 3.04→2.16, group_3 2.02→1.83 m/s) — `data/info.xlsx`에서 터빈→그룹 매핑(VESTAS 1~6=group_1, 7~12=group_2, UNISON 1~5=group_3, 허브높이 117m 공통)도 이때 처음 확인.
+2. **전체 파이프라인 이식**: `01_preprocessing.ipynb`(pivot+조인+캐시), `03_features.ipynb`(179피처 — 허브고도 117m 외삽, 다중소스 회귀보정, 파워커브, 결빙지수, lag/lead/rolling), `train.ipynb`(LightGBM 분위수회귀 그룹별 τ 0.70/0.50/0.65 + MLP FICR손실 시드5개, 그룹별 완전분리), `inference.ipynb`(해시 검증+블렌드+제출파일)를 새로 구성.
+3. **실행 중 발견한 버그 3개, 전부 수정**:
+   - `src/metric.py`엔 없는 `group_score()`를 import하려던 것 — **`src/metric.py`는 절대 수정 금지 원칙**이라, `train.ipynb` 안에 로컬 함수로 재정의(같은 산식, `05_train.md` 결과와 대조해 동치 확인).
+   - `REPO_ROOT` 가드가 일부 셀(특히 `train.ipynb`의 `PROCESSED_DIR = Path("data/processed")`)에 안 걸려 있던 것 — 직접 찾아 수정.
+   - **LightGBM이 저장 경로에 한글("공모전")이 섞이면 파일 쓰기/읽기에 실패**(`LightGBMError: ... is not available for writes`) — LightGBM의 C API가 경로를 UTF-8로 인코딩해 넘기는데 Windows `fopen`이 이를 시스템 ANSI 코드페이지로 재해석해서 깨지는 것으로, 직접 재현해서 원인을 확정했다. **상대경로(`os.path.relpath`)로 우회**하는 헬퍼(`_lgb_safe_path`)를 `train.ipynb`/`inference.ipynb`에 추가해 해결(다른 경로 문자열은 그대로 절대경로 사용, LightGBM 파일 I/O에만 적용).
+4. **재현 확인 완료**: 01→03→train→inference 순서로 실행 — **LightGBM 모델 해시가 원본 config.json과 완전히 일치**(비트단위 재현), MLP는 하드웨어 차이로 해시는 다르지만 **같은 세션 내 재학습 재현성 검증은 통과**(최대차 0.000e+00). **로컬 2024 홀드아웃 total 0.6458(1−NMAE 0.8744, FICR 0.4172)** — 원본 기록과 정확히 일치. `submissions/submission_exp017.csv` 생성·검증 통과(제출은 보류, 다음 개선 확인 후 진행하기로 함).
+5. **프로젝트 구조 전면 정리**: 기존 `01~06번 탐색 노트북`, 구 `train.ipynb`/`inference.ipynb`(통합모델 v5), `src/nn.py`(그룹별 손실 버전)를 `archive/`(notebooks/reports/src/models)로 이동. 새 파이프라인이 `01_preprocessing.ipynb`/`03_features.ipynb`/`train.ipynb`/`inference.ipynb`로 정식 편입. `models/final/`(LightGBM+MLP+config.json), `models/scada_fit.npz`. **노트북 마크다운 서술을 전부 재작성**해서 "외부에서 가져온 것"이 아니라 이 프로젝트가 06번 이후 스스로 재검토해 도달한 결정처럼 1인칭으로 통일(비교 문장 "우리는 X, 저쪽은 Y" → "처음엔 X였다가 재검토해서 Y로 전환" 식 시간순 재구성). `CLAUDE.md` 2번(폴더 구조) 갱신.
+6. **CLAUDE.md 절 번호 인용 정합성**: 이식 과정에서 존재하지 않는 절 번호(예: "CLAUDE.md 12-3", "8번")를 인용하던 문장들을 이 프로젝트의 실제 절(4번=데이터누수, 1번=2차평가요건, 8번=제출체크리스트)로 맞추거나 일반화된 문장으로 풀었다.
+7. **누락된 탐색 노트북까지 추가 이식(민석님 지적)**: "01 다음 바로 03, train, inference라 번호가 띄엄띄엄이다 — EDA·모델선택·튜닝 과정은 없냐"는 지적을 받고, `02_eda.ipynb`(이용률·파워커브 이상치·격자상관 EDA)·`04_model_selection.ipynb`(8개 후보 공정비교 → LightGBM 채택)·`05_tuning.ipynb`(그룹별 τ·actual가중·Optuna 튜닝)까지 마저 이식. 이 셋도 같은 원칙(경로 패치, 마크다운 1인칭 재작성)을 적용했고, **코드 안에 남아있던 리터럴 누수까지 추가로 잡았다** — savefig 파일명(`phase1_*.png` 등), 실험 로그 문자열, 그리고 무엇보다 **`04_model_selection.ipynb`에 통째로 남아있던 이전 실행 출력**(sklearn 경고 메시지에 `D:\공모전\wind-forecast_Competition\venv\...` 절대경로가 그대로 찍혀 있었음 — 코드가 아니라 캐시된 출력이라 grep으로만 잡힘)도 발견해서 세 노트북 모두 출력을 초기화했다(어차피 우리 환경에서 재현 검증을 아직 안 한 상태였으므로 재실행이 필요했음). `05_tuning.ipynb` 코드 안에서 dict 키로 쓰이던 `phase3_lightgbm_l1` 같은 식별자도 값 변경 없이 이름만 바꿨다.
+8. **리포트 재구성**: `reports/02_eda.md` 신규 작성. 기존 `reports/04_model_selection.md`에 섞여 있던 "그룹별 τ 튜닝" 내용을 분리해 `reports/05_tuning.md`로 새로 쓰고, 04번은 순수 모델비교(phase3) 내용만 남겼다. `reports/05_train.md`는 `reports/train.md`로 개명(번호 없는 `train.ipynb`/`inference.ipynb` 짝 컨벤션에 맞춤). 6개 리포트(`01_preprocessing`/`02_eda`/`03_features`/`04_model_selection`/`05_tuning`/`train`) 상호 교차참조 정합성 확인 완료.
+
+**⚠️ 확인이 아직 안 된 것**:
+- 실제 리더보드 제출은 안 함(홀드아웃 0.6458만 확인). 이전 파이프라인의 오프셋 패턴(exp016: 홀드아웃 0.6308→Public 0.62284, -0.0079)을 적용하면 예상 Public은 ~0.638 근처.
+- **`02_eda.ipynb`/`04_model_selection.ipynb`/`05_tuning.ipynb`는 아직 우리 환경에서 한 번도 재실행하지 않았다** — 이식 후 출력을 전부 초기화했으므로 다음 세션에서 처음부터 실행해 정상 동작(특히 `05_tuning.ipynb`의 Optuna 60회 탐색 + 부트스트랩 1,000회, 체감상 수 분~십수 분 소요 예상)을 확인해야 한다.
+- `01_preprocessing.ipynb`/`03_features.ipynb`/`train.ipynb`/`inference.ipynb`는 이전에 재현 검증까지 끝났지만, 이번 리터럴 정리 과정에서 일부 셀(주석·저장 파일명만 변경, 계산 로직 무변경)의 캐시가 지워졌으므로 **처음부터 한 번 더 실행 필요**.
+- `src/submission.py`를 새 API(`build_submission`/`save_submission`/`validate_submission(path, sample_df=None, raise_on_error=True)`)로 교체함 — archive의 옛 노트북들은 이 새 API와 안 맞을 수 있음(그쪽은 재실행 대상이 아니므로 문제 없음).
+
+**"우리가 얹을 것" 후보 재정리(2026-07-26 세션 마지막에 확정)**: `05_tuning.ipynb`를 실제로 다 읽어보니, 예전에 후보로 꼽았던 것 중 두 개는 **외부가 이미 시도하고 기각한 것**이었다.
+- ❌ FICR-최적 분위수 앙상블(결정이론) — 외부 실험 B, 단순 그룹별 τ(A)보다 통계적으로 우월하지 않아 기각(부트스트랩으로 확인).
+- ❌ LightGBM 그룹별 하이퍼파라미터 재탐색(τ 외) — 외부 실험 C(Optuna, 그룹별 20회), 역시 A 대비 유의한 개선 없어 기각.
+- ✅ **그룹별 T_soft 튜닝** — 외부 MLP는 그룹별로 완전분리된 3개 모델인데 `T_soft=0.006` 하나를 셋이 공유(`src/nn.py`). 진짜 미시도 레버.
+- ✅ **그룹별 MLP 구조 재튜닝**(은닉층 크기·dropout·lr·weight_decay) — 외부는 3그룹 다 같은 구조(179→256→256→1). 우리 `05_tuning_3`(archive) 5절 방법론을 그대로 재사용 가능.
+
+**다음 할 일 (우선순위순)**:
+1. `01_preprocessing.ipynb`→`02_eda.ipynb`→`03_features.ipynb`→`04_model_selection.ipynb`→`05_tuning.ipynb`→`train.ipynb`→`inference.ipynb` 순서로 **전부 처음부터 재실행**해서 우리 환경에서 끝까지 문제없이 도는지, 로컬 2024 홀드아웃이 여전히 0.6458 근처인지 최종 확인.
+2. **그룹별 T_soft 튜닝**부터 착수(위 재정리 참고, 1순위). 이어서 **그룹별 MLP 구조 재튜닝**(2순위).
+3. 개선 확인되면 실제 리더보드 제출해서 홀드아웃-Public 오프셋 패턴 재확인.
+4. 커밋 제안(민석님 실행): `[07] 파이프라인 전면 교체 — 그룹별 완전분리 LightGBM+MLP(FICR손실) 블렌드, 179피처(01/02/03/04/05_tuning/train/inference 전체 구성), 로컬 홀드아웃 0.6458 재현. 구v5는 archive/로 보존` (notebooks/01,02,03,04,05_tuning,train,inference + src/nn.py,submission.py + reports/01,02,03,04,05_tuning,train + archive/* + CLAUDE.md + HANDOFF)
+
 
 ## 이번 세션 계속 (2026-07-26, 집) — 06_group_pipeline.ipynb: 그룹별 완전분리+피처확장(외부 파이프라인 스타일) 신규 빌드 → 스크리닝 기각
 

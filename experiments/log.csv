@@ -1,0 +1,2 @@
+﻿exp_id,date,git_hash,model,features,total_score,one_minus_nmae,ficr,nmae_g1,nmae_g2,nmae_g3,ficr_g1,ficr_g2,ficr_g3,val_period,fit_seconds,public_score,note
+exp017,2026-07-26,6a2c491(dirty),FINAL blend(lightgbm_quantile + mlp_metric_loss),v1_179feat,0.6458,0.8744,0.4172,,,,,,,2024 홀드아웃(학습 제외 시). 최종 모델은 2022~2024 전체 학습,,,"제출 submission_exp017.csv | blend_w={'kpx_group_1': 0.8, 'kpx_group_2': 0.5, 'kpx_group_3': 0.9} | T_SOFT=0.006 | MLP 시드5평균 | exp016(LGB단독) 대비 홀드아웃 +0.0151"
