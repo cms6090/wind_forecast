@@ -53,7 +53,24 @@ import torch.nn as nn
 # ---------------------------------------------------------------------------
 # 상수 (근거는 reports/phase6_nn_metric_loss.md)
 # ---------------------------------------------------------------------------
-T_SOFT = 0.006          # 계단을 부드럽게 하는 폭. 교차검증으로 선택 (0.004/0.006/0.010 중)
+# T_SOFT — 계단을 부드럽게 하는 폭. **이 값은 "기본값"일 뿐이고 실제 학습에서는 호출부가 정한다.**
+#
+# `train_mlp()`가 `t_soft` 인자를 받으므로 `train.ipynb`는 자기 CONFIGS의 값을 명시적으로 넘긴다.
+# 여기 상수를 그대로 두는 이유는 두 가지다.
+#   (1) 아래 0.006은 **exp017(Public 0.6388632247) 확정 모델이 실제로 쓴 값**이다.
+#       `06_feature_ablation.ipynb`의 칸 A가 이 상수를 import해 그 모델을 재현하므로,
+#       값을 바꾸면 과거 실험의 재현이 조용히 깨진다.
+#   (2) 추론(`inference.ipynb`)은 학습을 하지 않아 이 값을 쓰지 않는다.
+#
+# 격자 탐색 이력 (2024 홀드아웃 하네스, `reports/06_feature_ablation.md`):
+#   1차(구v5)  0.004 / 0.006 / 0.010     -> 0.006
+#   2차(06 §5) 0.003 / 0.006 / 0.012 / 0.025 -> 0.003 (**격자 최솟값 = 경계에서 멈춤**)
+#   3차(06 §12) 0.0005 / 0.001 / 0.002 / 0.003 / 0.004 -> **0.001에서 봉우리가 갇힘**
+#       (0.0005에서 다시 내려간다 — T가 작아질수록 기울기를 받는 샘플이 밴드 경계 ±T 창
+#        안으로만 좁아지기 때문. 아래 soft_price 주석 참고)
+#   단, 내부검증 개선(+0.0045)의 홀드아웃 실현율은 11%에 그쳤다 -> A'(0.003)와 A''(0.001)를
+#   둘 다 제출해 리더보드로 가르는 중이다.
+T_SOFT = 0.006
 HIDDEN = 256            # 은닉층 폭
 DROPOUT = 0.15
 LR = 1e-3
@@ -84,7 +101,7 @@ def set_seed(seed: int) -> None:
 
 class MLP(nn.Module):
     """
-    179개 피처 -> 256 -> 256 -> 1. 출력은 sigmoid로 [0, 1](이용률)에 가둔다.
+    n_in개 피처 -> [hidden] x n_layers -> 1. 출력은 sigmoid로 [0, 1](이용률)에 가둔다.
 
     출력을 sigmoid로 가두는 이유: 발전량은 0 미만이나 설비용량 초과가 물리적으로 불가능하다.
     모델이 애초에 그 범위 밖을 예측하지 못하게 하면 학습이 쉬워진다.
@@ -92,15 +109,31 @@ class MLP(nn.Module):
 
     입력: (배치, n_in) float32 텐서. **반드시 표준화된 값**이어야 한다 (standardize 참조).
     출력: (배치,) 이용률 예측 [0, 1]
+
+    **하위 호환**: `n_layers=2`(기본값)이면 층 구성이 예전과 완전히 같아
+    `state_dict` 키(`net.0.*`, `net.4.*`, `net.8.*`)까지 동일하다.
+    즉 이 변경으로 기존에 저장된 가중치를 그대로 읽을 수 있다.
+    학습 데이터 규모가 달라지면 적정 폭·깊이도 달라지므로(예: g3 통합 학습은 표본이 5.5배)
+    호출부가 인자로 넘겨 탐색할 수 있게 열어 둔 것이다.
     """
 
-    def __init__(self, n_in: int, hidden: int = HIDDEN, p_drop: float = DROPOUT):
+    def __init__(self, n_in: int, hidden=HIDDEN, p_drop: float = DROPOUT,
+                 n_layers: int = 2):
+        """
+        hidden : 정수면 `n_layers`개 층이 모두 그 폭이 된다 (예: 256, n_layers=2 -> [256, 256]).
+                 **시퀀스면 층별 폭을 그대로 쓰고 `n_layers`는 무시한다** (예: (512, 256) -> 512 -> 256).
+                 좁아지는 구조를 표현하려면 시퀀스로 넘긴다.
+        """
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_in, hidden), nn.BatchNorm1d(hidden), nn.GELU(), nn.Dropout(p_drop),
-            nn.Linear(hidden, hidden), nn.BatchNorm1d(hidden), nn.GELU(), nn.Dropout(p_drop),
-            nn.Linear(hidden, 1),
-        )
+        widths = [int(hidden)] * n_layers if isinstance(hidden, (int, np.integer)) else [int(w) for w in hidden]
+        assert len(widths) >= 1, "은닉층이 최소 하나는 있어야 합니다"
+        layers, d = [], n_in
+        for w in widths:
+            layers += [nn.Linear(d, w), nn.BatchNorm1d(w), nn.GELU(), nn.Dropout(p_drop)]
+            d = w
+        layers.append(nn.Linear(d, 1))
+        self.net = nn.Sequential(*layers)
+        self.widths = tuple(widths)          # config.json에 기록해 추론 때 재구성하는 데 쓴다
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(self.net(x)).squeeze(-1)
@@ -155,7 +188,9 @@ def standardize(X: np.ndarray, mu: np.ndarray, sd: np.ndarray) -> torch.Tensor:
 
 
 def train_mlp(X_tr: np.ndarray, y_tr: np.ndarray, seed: int, n_epochs: int,
-              t_soft: float = T_SOFT, eval_fn=None):
+              t_soft: float = T_SOFT, eval_fn=None,
+              hidden=HIDDEN, p_drop: float = DROPOUT, n_layers: int = 2,
+              lr: float = LR, weight_decay: float = WEIGHT_DECAY):
     """
     산식 손실로 MLP를 학습한다.
 
@@ -168,6 +203,12 @@ def train_mlp(X_tr: np.ndarray, y_tr: np.ndarray, seed: int, n_epochs: int,
         eval_fn : (model) -> float. 주어지면 EVAL_EVERY 에폭마다 호출해
                   값이 가장 큰 시점의 가중치를 되돌린다 (조기 종료).
                   None이면 조기 종료 없이 n_epochs를 끝까지 학습한다.
+        hidden, p_drop, n_layers, lr, weight_decay :
+                  신경망 구조와 최적화 설정. **기본값은 모듈 상수와 같아 하위 호환된다.**
+                  `hidden`은 정수(모든 층 같은 폭) 또는 시퀀스(층별 폭, 예: (512, 256))다.
+                  학습 데이터 규모가 바뀌면 이 값들의 적정치도 바뀌므로 인자로 열어 뒀다.
+                  특히 **`lr`이 중요하다** — 아래처럼 full-batch로 학습하므로
+                  배치 크기가 곧 데이터 크기이고, 표본이 몇 배가 되면 기울기의 성격이 달라진다.
     출력:
         (model, best_epoch). eval_fn이 None이면 best_epoch = n_epochs.
 
@@ -178,8 +219,8 @@ def train_mlp(X_tr: np.ndarray, y_tr: np.ndarray, seed: int, n_epochs: int,
     Xt = torch.tensor(X_tr.astype(np.float32))
     yt = torch.tensor(y_tr.astype(np.float32))
 
-    model = MLP(X_tr.shape[1], HIDDEN, DROPOUT)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    model = MLP(X_tr.shape[1], hidden, p_drop, n_layers)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_epochs)
 
     best_score, best_state, best_epoch, bad = -np.inf, None, n_epochs, 0

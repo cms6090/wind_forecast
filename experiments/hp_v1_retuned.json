@@ -1,0 +1,60 @@
+{
+  "lgb": {
+    "kpx_group_1": {
+      "alpha": 0.6634320197034341,
+      "learning_rate": 0.060735366670760536,
+      "num_leaves": 30,
+      "min_data_in_leaf": 107,
+      "feature_fraction": 0.8277384146421272,
+      "bagging_fraction": 0.7021159342498176,
+      "lambda_l1": 0.0012310907082674907,
+      "lambda_l2": 0.0015148735276991681,
+      "objective": "quantile",
+      "bagging_freq": 1,
+      "verbosity": -1,
+      "seed": 42,
+      "num_threads": 4,
+      "deterministic": true,
+      "force_row_wise": true
+    },
+    "kpx_group_2": {
+      "objective": "quantile",
+      "learning_rate": 0.05,
+      "num_leaves": 63,
+      "min_data_in_leaf": 40,
+      "feature_fraction": 0.7,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "lambda_l2": 1.0,
+      "verbosity": -1,
+      "seed": 42,
+      "num_threads": 4,
+      "deterministic": true,
+      "force_row_wise": true,
+      "alpha": 0.5
+    },
+    "kpx_group_3": {
+      "alpha": 0.6634320197034341,
+      "learning_rate": 0.06879827395929823,
+      "num_leaves": 35,
+      "min_data_in_leaf": 107,
+      "feature_fraction": 0.701572609988988,
+      "bagging_fraction": 0.7021159342498176,
+      "lambda_l1": 0.0012021425535901336,
+      "lambda_l2": 0.5096502392023174,
+      "objective": "quantile",
+      "bagging_freq": 1,
+      "verbosity": -1,
+      "seed": 42,
+      "num_threads": 4,
+      "deterministic": true,
+      "force_row_wise": true
+    }
+  },
+  "t_soft": 0.003,
+  "w": {
+    "kpx_group_1": 0.65,
+    "kpx_group_2": 0.35,
+    "kpx_group_3": 0.85
+  }
+}
